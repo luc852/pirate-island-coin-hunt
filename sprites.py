@@ -340,6 +340,11 @@ class Player:
         if self.invincible_t > 0:
             self.invincible_t = max(0.0, self.invincible_t - dt)
 
+    def push(self, dx, dy, wall_rects, bounds):
+        """Shoved by something other than the player's own feet (the wind)."""
+        self._step(dx, 0, wall_rects, bounds)
+        self._step(0, dy, wall_rects, bounds)
+
     def start_invincibility(self, duration=1.6):
         self.invincible_t = duration
 
@@ -429,7 +434,30 @@ class Monster:
                 moved = True
         return moved
 
-    def update(self, dt, player, wall_rects, bounds):
+    def _seek(self, tx, ty, step, wall_rects, bounds):
+        """Walk toward a point, each axis on its own so corners slide."""
+        dx = max(-step, min(step, tx - self.x))
+        dy = max(-step, min(step, ty - self.y))
+        return self._try_axis_move(dx, dy, wall_rects, bounds)
+
+    def _next_tile(self, dist, toward=True):
+        """The neighbouring tile one step nearer the player (or one step
+        further, for something running away), read off the distance field."""
+        tile = (int(self.x // TILE_SIZE), int(self.y // TILE_SIZE))
+        here = dist.get(tile)
+        if here is None:
+            return None
+        best, best_d = None, here
+        for ox, oy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            n = (tile[0] + ox, tile[1] + oy)
+            d = dist.get(n)
+            if d is None:
+                continue
+            if (d < best_d) if toward else (d > best_d):
+                best, best_d = n, d
+        return best
+
+    def update(self, dt, player, wall_rects, bounds, dist=None):
         self.bob_t += dt
 
         if self.mode == "chase":
@@ -445,11 +473,15 @@ class Monster:
         speed = self.base_speed * (0.55 if (self.mode == "mix" and self.chasing) else 1.0)
 
         if self.chasing:
-            vx, vy = player.x - self.x, player.y - self.y
-            dist = math.hypot(vx, vy)
-            if dist > 1:
-                vx, vy = vx / dist, vy / dist
-            moved = self._try_axis_move(vx * speed * dt, vy * speed * dt, wall_rects, bounds)
+            # Follow the maze rather than the compass. The old straight-line
+            # chase pressed crabs into the nearest wall and left them there.
+            nxt = self._next_tile(dist) if dist else None
+            if nxt is not None:
+                tx = nxt[0] * TILE_SIZE + TILE_SIZE / 2
+                ty = nxt[1] * TILE_SIZE + TILE_SIZE / 2
+            else:
+                tx, ty = player.x, player.y
+            moved = self._seek(tx, ty, speed * dt, wall_rects, bounds)
             if not moved:
                 # fall back to wander-style random step to get unstuck
                 self.dir = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
@@ -496,6 +528,31 @@ class Monster:
             pygame.draw.line(surface, dark, (sx, cy - 6 + bob), (sx, cy - 10 + bob), 2)
             pygame.draw.circle(surface, (255, 255, 255), (sx, cy - 12 + bob), 4)
             pygame.draw.circle(surface, (20, 20, 20), (sx, cy - 12 + bob), 2)
+
+
+class GoldenCrab(Monster):
+    """Harmless, valuable, and it runs. Catching it is the point."""
+
+    def __init__(self, col, row):
+        super().__init__(col, row, (236, 186, 52), 150, "flee")
+
+    def update_flee(self, dt, player, wall_rects, bounds, dist):
+        self.bob_t += dt
+        step = self.base_speed * dt
+        near = math.hypot(player.x - self.x, player.y - self.y) < TILE_SIZE * 7
+        nxt = self._next_tile(dist, toward=False) if near else None
+        if nxt is not None:
+            self._seek(nxt[0] * TILE_SIZE + TILE_SIZE / 2,
+                       nxt[1] * TILE_SIZE + TILE_SIZE / 2, step, wall_rects, bounds)
+            return
+        # Nowhere further to run, or not yet spooked: amble.
+        self.dir_timer -= dt
+        if self.dir_timer <= 0:
+            self.dir = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
+            self.dir_timer = random.uniform(0.4, 1.0)
+        if not self._try_axis_move(self.dir[0] * step * 0.5, self.dir[1] * step * 0.5,
+                                   wall_rects, bounds):
+            self.dir_timer = 0
 
 
 def _heart_points(cx, cy, size, steps=30):

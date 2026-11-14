@@ -19,7 +19,8 @@ ROOT = Path(__file__).parent.resolve()
 # Only the running game. Deliberately excludes the .dc.html design mockups, the
 # 2.3 MB redesign document, scores.json (the browser uses localStorage instead)
 # and .claude/, all of which pygbag would otherwise pack into the public bundle.
-GAME_FILES = ["main.py", "game.py", "sprites.py", "levels.py", "data.py", "ui.py"]
+GAME_FILES = ["main.py", "game.py", "sprites.py", "levels.py", "data.py", "ui.py",
+              "art.py", "audio.py", "events.py", "fx.py", "scoring.py", "treasure.py"]
 GAME_DIRS = ["assets"]
 
 APP = "pirate-island-coin-hunt"
@@ -55,6 +56,9 @@ def build():
          "--app_name", APP,
          "--title", "Pirate Island Coin Hunt",
          "--ume_block", "0",
+         # pygbag would rather have OGG, but nothing here can encode it and
+         # SDL_mixer's built-in WAV loader works in the browser.
+         "--disable-sound-format-error",
          str(STAGE)],
         check=True,
     )

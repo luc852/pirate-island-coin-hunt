@@ -11,6 +11,7 @@ is shared by everyone using that browser profile, and by no one else.
 import json
 import os
 import sys
+import time
 
 IS_WEB = sys.platform == "emscripten"
 
@@ -18,10 +19,13 @@ SCORES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scores.j
 STORAGE_KEY = "pirate-island-coin-hunt/scores"
 
 MAX_NAME_LEN = 14
+MAX_RUNS = 10
 
 DEFAULT_DATA = {
     "players": {},
     "overall_best": {"name": "", "score": 0},
+    # The ten best individual voyages, for the Hall of Fame.
+    "runs": [],
 }
 
 
@@ -82,12 +86,32 @@ def load_scores():
             continue
         # A file edited by hand may hold two spellings of one pirate; fold them.
         existing = find_player(data, name)
+        legend = bool(entry.get("legend", False))
         if existing:
             data["players"][existing]["best_score"] = max(
                 data["players"][existing]["best_score"], best)
             data["players"][existing]["games_played"] += games
+            data["players"][existing]["legend"] |= legend
         else:
-            data["players"][name] = {"best_score": best, "games_played": games}
+            data["players"][name] = {"best_score": best, "games_played": games,
+                                     "legend": legend}
+
+    # Rosters saved before the Hall of Fame existed simply have no runs.
+    runs = loaded.get("runs")
+    for run in runs if isinstance(runs, list) else []:
+        try:
+            data["runs"].append({
+                "name": clean_name(run["name"]),
+                "score": int(run["score"]),
+                "islands": int(run.get("islands", 0)),
+                "fragments": int(run.get("fragments", 0)),
+                "legend": bool(run.get("legend", False)),
+                "rank": str(run.get("rank", ""))[:24],
+                "date": str(run.get("date", ""))[:10],
+            })
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+    sort_runs(data)
 
     refresh_overall_best(data)
     return data
@@ -117,13 +141,23 @@ def refresh_overall_best(data):
     return data
 
 
+def sort_runs(data):
+    data["runs"].sort(key=lambda r: (-r["score"], r["name"].lower()))
+    del data["runs"][MAX_RUNS:]
+
+
+def is_legend(data, name):
+    existing = find_player(data, name)
+    return bool(existing and data["players"][existing].get("legend"))
+
+
 def register_player(data, name):
     """Add the pirate if new, and return the canonical spelling of the name."""
     existing = find_player(data, name)
     if existing:
         return existing
     name = clean_name(name)
-    data["players"][name] = {"best_score": 0, "games_played": 0}
+    data["players"][name] = {"best_score": 0, "games_played": 0, "legend": False}
     return name
 
 
@@ -138,13 +172,28 @@ def ranking(data):
                   key=lambda pair: (-pair[1], pair[0].lower()))
 
 
-def record_score(data, player_name, score):
-    """Register the pirate if needed, then keep their best run and the overall best."""
+def record_score(data, player_name, score, summary=None):
+    """Register the pirate if needed, then keep their best run, the overall
+    best, and - when the voyage ranks - a line in the Hall of Fame."""
     name = register_player(data, player_name)
     entry = data["players"][name]
     entry["games_played"] += 1
     if score > entry["best_score"]:
         entry["best_score"] = score
+    summary = summary or {}
+    if summary.get("legend"):
+        entry["legend"] = True
+    if score > 0:
+        data["runs"].append({
+            "name": name,
+            "score": int(score),
+            "islands": int(summary.get("islands", 0)),
+            "fragments": int(summary.get("fragments", 0)),
+            "legend": bool(summary.get("legend", False)),
+            "rank": str(summary.get("rank", "")),
+            "date": time.strftime("%Y-%m-%d"),
+        })
+        sort_runs(data)
     refresh_overall_best(data)
     save_scores(data)
     return data
